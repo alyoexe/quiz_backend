@@ -10,3 +10,18 @@ class UploadedPDF(models.Model):
 
     def __str__(self):
         return self.title
+    
+class Quiz(models.Model):
+    pdf = models.ForeignKey(UploadedPDF, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    title = models.CharField(max_length=200)
+
+class Question(models.Model):
+    quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE)
+    text = models.TextField()
+
+class Option(models.Model):
+    question = models.ForeignKey(Question, on_delete=models.CASCADE)
+    text = models.CharField(max_length=200)
+    is_correct = models.BooleanField(default=False)
+
