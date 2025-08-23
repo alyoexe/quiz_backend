@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework import status, permissions,viewsets
 
-from .models import UploadedPDF,Quiz, Question, Option
+from .models import UploadedPDF,Quiz, Question, Option, QuizAttempt, UserAnswer
 from .serializers import UploadedPDFSerializer,QuizDetailSerializer
 from .utils import extract_text_from_pdf,generate_mcqs_from_text
 
@@ -66,7 +66,192 @@ class GenerateQuizView(APIView):
 class QuizViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Provides `list` and `retrieve` endpoints for quizzes.
+    GET /api/quizzes/ - List all quizzes
+    GET /api/quizzes/{id}/ - Get specific quiz with all questions and options
     """
     queryset = Quiz.objects.all().order_by('-created_at')
     serializer_class = QuizDetailSerializer
-    permission_classes = [permissions.AllowAny] 
+    permission_classes = [permissions.AllowAny]
+
+
+class SubmitQuizView(APIView):
+    """
+    Submit quiz answers and get score
+    POST /api/submit-quiz/{quiz_id}/
+    
+    Expected payload:
+    {
+        "answers": [
+            {"question_id": 1, "option_id": 3},
+            {"question_id": 2, "option_id": 7}
+        ]
+    }
+    """
+    permission_classes = [permissions.AllowAny]
+    
+    def post(self, request, quiz_id):
+        try:
+            quiz = Quiz.objects.get(id=quiz_id)
+        except Quiz.DoesNotExist:
+            return Response({"error": "Quiz not found"}, status=404)
+        
+        # Debug: Print the received data
+        print("Received data:", request.data)
+        
+        answers = request.data.get('answers', [])
+        if not answers:
+            return Response({
+                "error": "No answers provided", 
+                "received_data": str(request.data)
+            }, status=400)
+        
+        if not isinstance(answers, list):
+            return Response({
+                "error": "Answers must be a list", 
+                "received_type": str(type(answers))
+            }, status=400)
+        
+        user = request.user if request.user.is_authenticated else None
+        total_questions = quiz.question_set.count()
+        
+        # Create quiz attempt
+        attempt = QuizAttempt.objects.create(
+            quiz=quiz,
+            user=user,
+            total_questions=total_questions
+        )
+        
+        correct_count = 0
+        results = []
+        
+        for answer_data in answers:
+            question_id = answer_data.get('question_id')
+            option_id = answer_data.get('option_id')
+            
+            print(f"Processing: question_id={question_id}, option_id={option_id}")
+            
+            try:
+                question = Question.objects.get(id=question_id, quiz=quiz)
+                print(f"Found question: {question.text[:50]}...")
+                
+                selected_option = Option.objects.get(id=option_id, question=question)
+                print(f"Found option: {selected_option.text}")
+                
+                is_correct = selected_option.is_correct
+                if is_correct:
+                    correct_count += 1
+                
+                # Save user answer
+                UserAnswer.objects.create(
+                    attempt=attempt,
+                    question=question,
+                    selected_option=selected_option,
+                    is_correct=is_correct
+                )
+                
+                # Get correct answer for response
+                correct_option = Option.objects.get(question=question, is_correct=True)
+                
+                results.append({
+                    "question_id": question_id,
+                    "question_text": question.text,
+                    "selected_option": selected_option.text,
+                    "correct_option": correct_option.text,
+                    "is_correct": is_correct
+                })
+                
+            except Question.DoesNotExist:
+                print(f"Question with id={question_id} not found in quiz {quiz_id}")
+                return Response({
+                    "error": f"Question with id {question_id} not found in this quiz"
+                }, status=400)
+            except Option.DoesNotExist:
+                print(f"Option with id={option_id} not found for question {question_id}")
+                return Response({
+                    "error": f"Option with id {option_id} not found for question {question_id}"
+                }, status=400)
+        
+        # Update attempt score
+        attempt.score = correct_count
+        attempt.save()
+        
+        return Response({
+            "attempt_id": attempt.id,
+            "score": correct_count,
+            "total_questions": total_questions,
+            "percentage": round((correct_count / total_questions) * 100, 2),
+            "results": results
+        })
+
+
+class UserQuizHistoryView(APIView):
+    """
+    Get user's quiz attempt history
+    GET /api/user/quiz-history/
+    """
+    permission_classes = [permissions.AllowAny]
+    
+    def get(self, request):
+        user = request.user if request.user.is_authenticated else None
+        
+        if not user:
+            # For anonymous users, we could track by session or return empty
+            return Response({"message": "Login required to view history", "attempts": []})
+        
+        attempts = QuizAttempt.objects.filter(user=user).select_related('quiz').order_by('-submitted_at')
+        
+        history = []
+        for attempt in attempts:
+            history.append({
+                "attempt_id": attempt.id,
+                "quiz_title": attempt.quiz.title,
+                "score": attempt.score,
+                "total_questions": attempt.total_questions,
+                "percentage": round((attempt.score / attempt.total_questions) * 100, 2),
+                "submitted_at": attempt.submitted_at,
+            })
+        
+        return Response({"attempts": history})
+
+
+class QuizAnalyticsView(APIView):
+    """
+    Get analytics for a specific quiz
+    GET /api/quiz/{quiz_id}/analytics/
+    """
+    permission_classes = [permissions.AllowAny]
+    
+    def get(self, request, quiz_id):
+        try:
+            quiz = Quiz.objects.get(id=quiz_id)
+        except Quiz.DoesNotExist:
+            return Response({"error": "Quiz not found"}, status=404)
+        
+        attempts = QuizAttempt.objects.filter(quiz=quiz)
+        total_attempts = attempts.count()
+        
+        if total_attempts == 0:
+            return Response({
+                "quiz_title": quiz.title,
+                "total_attempts": 0,
+                "average_score": 0,
+                "pass_rate": 0
+            })
+        
+        scores = [attempt.score for attempt in attempts]
+        average_score = sum(scores) / len(scores)
+        
+        # Consider 60% as passing
+        passing_score = quiz.question_set.count() * 0.6
+        passed_attempts = len([score for score in scores if score >= passing_score])
+        pass_rate = (passed_attempts / total_attempts) * 100
+        
+        return Response({
+            "quiz_title": quiz.title,
+            "total_attempts": total_attempts,
+            "average_score": round(average_score, 2),
+            "average_percentage": round((average_score / quiz.question_set.count()) * 100, 2),
+            "pass_rate": round(pass_rate, 2),
+            "highest_score": max(scores),
+            "lowest_score": min(scores)
+        }) 
