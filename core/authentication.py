@@ -4,8 +4,10 @@ from rest_framework import status
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
+from rest_framework import permissions
 
 class RegisterView(APIView):
+    permission_classes = [permissions.AllowAny]
     def post(self, request):
         username = request.data.get('username')
         email = request.data.get('email')
@@ -29,6 +31,7 @@ class RegisterView(APIView):
         }, status=201)
 
 class LoginView(APIView):
+    permission_classes = [permissions.AllowAny]
     def post(self, request):
         username = request.data.get('username')
         password = request.data.get('password')

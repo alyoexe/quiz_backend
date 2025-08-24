@@ -214,6 +214,55 @@ class UserQuizHistoryView(APIView):
         return Response({"attempts": history})
 
 
+class QuizAttemptDetailView(APIView):
+    """
+    Get detailed information about a specific quiz attempt
+    GET /api/attempt/{attempt_id}/
+    """
+    permission_classes = [permissions.AllowAny]
+    
+    def get(self, request, attempt_id):
+        try:
+            attempt = QuizAttempt.objects.get(id=attempt_id)
+        except QuizAttempt.DoesNotExist:
+            return Response({"error": "Quiz attempt not found"}, status=404)
+        
+        # Get all user answers for this attempt
+        user_answers = UserAnswer.objects.filter(attempt=attempt).select_related(
+            'question', 'selected_option'
+        )
+        
+        # Build detailed results
+        results = []
+        for user_answer in user_answers:
+            # Get correct answer for this question
+            correct_option = Option.objects.get(
+                question=user_answer.question, 
+                is_correct=True
+            )
+            
+            results.append({
+                "question_id": user_answer.question.id,
+                "question_text": user_answer.question.text,
+                "selected_option": user_answer.selected_option.text,
+                "selected_option_id": user_answer.selected_option.id,
+                "correct_option": correct_option.text,
+                "correct_option_id": correct_option.id,
+                "is_correct": user_answer.is_correct
+            })
+        
+        return Response({
+            "attempt_id": attempt.id,
+            "quiz_title": attempt.quiz.title,
+            "quiz_id": attempt.quiz.id,
+            "score": attempt.score,
+            "total_questions": attempt.total_questions,
+            "percentage": round((attempt.score / attempt.total_questions) * 100, 2),
+            "submitted_at": attempt.submitted_at,
+            "results": results
+        })
+
+
 class QuizAnalyticsView(APIView):
     """
     Get analytics for a specific quiz
