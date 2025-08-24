@@ -7,9 +7,10 @@ class UploadedPDF(models.Model):
     pdf_file = models.FileField(upload_to='pdfs/')
     uploaded_at = models.DateTimeField(auto_now_add=True)
     extracted_text = models.TextField(blank=True, null=True)
+    is_public = models.BooleanField(default=True)  # Public by default
 
     def __str__(self):
-        return self.title
+        return f"{self.title} ({'Public' if self.is_public else 'Private'})"
     
 class Quiz(models.Model):
     pdf = models.ForeignKey(UploadedPDF, on_delete=models.CASCADE)

@@ -1,4 +1,5 @@
 from django.shortcuts import render
+from django.db.models import Q
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -15,6 +16,7 @@ class PDFUploadView(APIView):
     def post(self, request):
         file = request.FILES.get('pdf_file')
         title = request.data.get('title', 'Untitled')
+        is_public = request.data.get('is_public', 'true').lower() == 'true'  # Default to public
 
         if not file:
             return Response({'error': 'No file provided'}, status=400)
@@ -25,7 +27,8 @@ class PDFUploadView(APIView):
         pdf_instance = UploadedPDF.objects.create(
             user=user,
             title=title,
-            pdf_file=file
+            pdf_file=file,
+            is_public=is_public
         )
 
         # Extract text
@@ -42,15 +45,44 @@ class TestView(APIView):
     
 
 class GenerateQuizView(APIView):
+    """
+    Generate quiz from PDF
+    POST /api/generate-quiz/{pdf_id}/
+    
+    Optional payload:
+    {
+        "num_questions": 10
+    }
+    """
     def post(self, request, pdf_id):
         try:
             pdf = UploadedPDF.objects.get(id=pdf_id)
         except UploadedPDF.DoesNotExist:
             return Response({"error": "PDF not found"}, status=404)
 
-        questions = generate_mcqs_from_text(pdf.extracted_text, num_questions=5)
+        # Get number of questions from request data, default to 5
+        num_questions = request.data.get('num_questions', 5)
+        
+        # Validate num_questions
+        if not isinstance(num_questions, int) or num_questions < 1 or num_questions > 20:
+            return Response({
+                "error": "num_questions must be an integer between 1 and 20"
+            }, status=400)
 
-        quiz = Quiz.objects.create(pdf=pdf, title=f"Quiz from {pdf.title}")
+        questions = generate_mcqs_from_text(pdf.extracted_text, num_questions=num_questions)
+
+        # Check if AI generated any questions
+        if not questions:
+            return Response({
+                "error": "Failed to generate questions. Please try again or use a different PDF."
+            }, status=500)
+
+        # Create quiz with actual number of questions generated
+        actual_questions_count = len(questions)
+        quiz = Quiz.objects.create(
+            pdf=pdf, 
+            title=f"Quiz from {pdf.title} ({actual_questions_count} questions)"
+        )
 
         for q in questions:
             ques = Question.objects.create(quiz=quiz, text=q["question"])
@@ -61,17 +93,48 @@ class GenerateQuizView(APIView):
                     is_correct=(key == q["answer"])
                 )
 
-        return Response({"quiz_id": quiz.id, "message": "Quiz generated successfully"})
+        return Response({
+            "quiz_id": quiz.id, 
+            "message": f"Quiz with {actual_questions_count} questions generated successfully",
+            "requested_questions": num_questions,
+            "questions_generated": actual_questions_count
+        })
     
 class QuizViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Provides `list` and `retrieve` endpoints for quizzes.
-    GET /api/quizzes/ - List all quizzes
-    GET /api/quizzes/{id}/ - Get specific quiz with all questions and options
+    GET /api/quizzes/ - List all public quizzes + user's private quizzes
+    GET /api/quizzes/{id}/ - Get specific quiz (if public or belongs to user)
     """
-    queryset = Quiz.objects.all().order_by('-created_at')
+    queryset = Quiz.objects.all()  # Default queryset (will be overridden by get_queryset)
     serializer_class = QuizDetailSerializer
     permission_classes = [permissions.AllowAny]
+    
+    def get_queryset(self):
+        user = self.request.user if self.request.user.is_authenticated else None
+        
+        if user:
+            # Show public quizzes + user's own private quizzes
+            return Quiz.objects.filter(
+                Q(pdf__is_public=True) | Q(pdf__user=user)
+            ).order_by('-created_at')
+        else:
+            # Show only public quizzes for anonymous users
+            return Quiz.objects.filter(pdf__is_public=True).order_by('-created_at')
+    
+    def retrieve(self, request, pk=None):
+        try:
+            quiz = Quiz.objects.get(pk=pk)
+            user = request.user if request.user.is_authenticated else None
+            
+            # Check if user can access this quiz
+            if not quiz.pdf.is_public and quiz.pdf.user != user:
+                return Response({"error": "This quiz is private"}, status=403)
+            
+            serializer = self.get_serializer(quiz)
+            return Response(serializer.data)
+        except Quiz.DoesNotExist:
+            return Response({"error": "Quiz not found"}, status=404)
 
 
 class SubmitQuizView(APIView):
@@ -278,29 +341,38 @@ class QuizAnalyticsView(APIView):
         
         attempts = QuizAttempt.objects.filter(quiz=quiz)
         total_attempts = attempts.count()
+        total_questions = quiz.question_set.count()
         
         if total_attempts == 0:
             return Response({
                 "quiz_title": quiz.title,
+                "total_questions": total_questions,
                 "total_attempts": 0,
                 "average_score": 0,
-                "pass_rate": 0
+                "average_percentage": 0.0,
+                "pass_rate": 0.0,
+                "highest_score": 0,
+                "lowest_score": 0
             })
         
         scores = [attempt.score for attempt in attempts]
         average_score = sum(scores) / len(scores)
+        average_percentage = (average_score / total_questions) * 100
         
-        # Consider 60% as passing
-        passing_score = quiz.question_set.count() * 0.6
+        # Consider 60% as passing threshold
+        passing_threshold = 0.6
+        passing_score = total_questions * passing_threshold
         passed_attempts = len([score for score in scores if score >= passing_score])
         pass_rate = (passed_attempts / total_attempts) * 100
         
         return Response({
             "quiz_title": quiz.title,
+            "total_questions": total_questions,
             "total_attempts": total_attempts,
-            "average_score": round(average_score, 2),
-            "average_percentage": round((average_score / quiz.question_set.count()) * 100, 2),
-            "pass_rate": round(pass_rate, 2),
+            "average_score": round(average_score, 1),
+            "average_percentage": round(average_percentage, 1),
+            "pass_rate": round(pass_rate, 1),
+            "passing_threshold": f"{int(passing_threshold * 100)}%",
             "highest_score": max(scores),
             "lowest_score": min(scores)
         }) 
