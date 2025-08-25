@@ -7,7 +7,7 @@ from rest_framework import status, permissions,viewsets
 
 from .models import UploadedPDF,Quiz, Question, Option, QuizAttempt, UserAnswer
 from .serializers import UploadedPDFSerializer,QuizDetailSerializer
-from .utils import extract_text_from_pdf,generate_mcqs_from_text
+from .utils import extract_text_from_pdf,generate_mcqs_from_text, generate_answer_explanations
 
 class PDFUploadView(APIView):
     parser_classes = [MultiPartParser, FormParser]
@@ -63,10 +63,16 @@ class GenerateQuizView(APIView):
         # Get number of questions from request data, default to 5
         num_questions = request.data.get('num_questions', 5)
         
-        # Validate num_questions
-        if not isinstance(num_questions, int) or num_questions < 1 or num_questions > 20:
+        # Validate num_questions (no upper limit - batch processing handles any amount!)
+        if not isinstance(num_questions, int) or num_questions < 1:
             return Response({
-                "error": "num_questions must be an integer between 1 and 20"
+                "error": "num_questions must be a positive integer (minimum 1)"
+            }, status=400)
+        
+        # Add reasonable upper limit to prevent abuse (can be adjusted)
+        if num_questions > 200:
+            return Response({
+                "error": "Maximum 200 questions per request (to prevent timeout). Please make multiple requests for more."
             }, status=400)
 
         questions = generate_mcqs_from_text(pdf.extracted_text, num_questions=num_questions)
@@ -375,4 +381,81 @@ class QuizAnalyticsView(APIView):
             "passing_threshold": f"{int(passing_threshold * 100)}%",
             "highest_score": max(scores),
             "lowest_score": min(scores)
-        }) 
+        })
+
+
+class QuizExplanationView(APIView):
+    """
+    Get AI-generated explanations for quiz questions/answers
+    POST /api/quiz/{quiz_id}/explain/
+    
+    Expected payload:
+    {
+        "question_ids": [1, 2, 3],  # List of question IDs to explain
+        "include_context": true      # Whether to include PDF context in explanation (optional, default: true)
+    }
+    """
+    permission_classes = [permissions.AllowAny]
+    
+    def post(self, request, quiz_id):
+        try:
+            quiz = Quiz.objects.get(id=quiz_id)
+        except Quiz.DoesNotExist:
+            return Response({"error": "Quiz not found"}, status=404)
+        
+        # Check if user can access this quiz
+        user = request.user if request.user.is_authenticated else None
+        if not quiz.pdf.is_public and quiz.pdf.user != user:
+            return Response({"error": "This quiz is private"}, status=403)
+        
+        question_ids = request.data.get('question_ids', [])
+        include_context = request.data.get('include_context', True)
+        
+        if not question_ids:
+            return Response({"error": "No question_ids provided"}, status=400)
+        
+        if not isinstance(question_ids, list):
+            return Response({"error": "question_ids must be a list"}, status=400)
+        
+        # Validate question IDs belong to this quiz
+        questions = Question.objects.filter(id__in=question_ids, quiz=quiz).prefetch_related('option_set')
+        
+        if questions.count() != len(question_ids):
+            found_ids = list(questions.values_list('id', flat=True))
+            invalid_ids = [qid for qid in question_ids if qid not in found_ids]
+            return Response({
+                "error": f"Some question IDs don't belong to this quiz: {invalid_ids}"
+            }, status=400)
+        
+        # Prepare questions data for AI explanation
+        questions_data = []
+        for question in questions:
+            options = question.option_set.all()
+            correct_option = options.filter(is_correct=True).first()
+            
+            question_info = {
+                "question_id": question.id,
+                "question_text": question.text,
+                "options": [{"text": opt.text, "is_correct": opt.is_correct} for opt in options],
+                "correct_answer": correct_option.text if correct_option else "N/A"
+            }
+            questions_data.append(question_info)
+        
+        # Get PDF context if requested
+        pdf_context = quiz.pdf.extracted_text if include_context else ""
+        
+        try:
+            # Generate explanations using AI
+            explanations = generate_answer_explanations(questions_data, pdf_context)
+            
+            return Response({
+                "quiz_id": quiz.id,
+                "quiz_title": quiz.title,
+                "explanations": explanations
+            })
+            
+        except Exception as e:
+            return Response({
+                "error": "Failed to generate explanations",
+                "details": str(e)
+            }, status=500) 

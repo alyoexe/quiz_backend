@@ -2,7 +2,8 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
     PDFUploadView, TestView, GenerateQuizView, QuizViewSet, 
-    SubmitQuizView, UserQuizHistoryView, QuizAnalyticsView, QuizAttemptDetailView
+    SubmitQuizView, UserQuizHistoryView, QuizAnalyticsView, QuizAttemptDetailView,
+    QuizExplanationView
 )
 from .authentication import RegisterView, LoginView
 
@@ -24,6 +25,7 @@ urlpatterns = [
     path('user/quiz-history/', UserQuizHistoryView.as_view(), name='user-quiz-history'),
     path('attempt/<int:attempt_id>/', QuizAttemptDetailView.as_view(), name='quiz-attempt-detail'),
     path('quiz/<int:quiz_id>/analytics/', QuizAnalyticsView.as_view(), name='quiz-analytics'),
+    path('quiz/<int:quiz_id>/explain/', QuizExplanationView.as_view(), name='quiz-explanation'),
     
     # Test endpoint
     path('test/', TestView.as_view(), name='test'),
