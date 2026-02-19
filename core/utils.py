@@ -1,5 +1,5 @@
 import fitz  # PyMuPDF
-import openai
+from openai import OpenAI
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -13,9 +13,11 @@ def extract_text_from_pdf(file_path):
     return text
 
 
-# Set Groq credentials
-openai.api_key = os.getenv("GROQ_API_KEY")
-openai.api_base = "https://api.groq.com/openai/v1"
+# Set up Groq client
+client = OpenAI(
+    api_key=os.getenv("GROQ_API_KEY"),
+    base_url="https://api.groq.com/openai/v1"
+)
 
 
 def generate_mcqs_from_text(text, num_questions=5):
@@ -27,7 +29,7 @@ def generate_mcqs_from_text(text, num_questions=5):
     
     # Use batch processing for larger requests or large PDFs
     # This ensures we use the FULL PDF content, not just the beginning
-    if num_questions > 5 or len(text) > 3000:
+    if num_questions > 8 or len(text) > 3000:
         return generate_mcqs_in_batches(text, num_questions)
     
     # For smaller requests with small PDFs, use single batch
@@ -44,16 +46,7 @@ def generate_mcqs_in_batches(text, total_questions):
     
     # Calculate optimal chunk size and questions per batch
     chunk_size = 2500  # Slightly larger chunks for better context
-    
-    # Dynamic questions per batch based on total request
-    if total_questions <= 20:
-        questions_per_batch = min(10, total_questions)  # Up to 10 per batch for small requests
-    elif total_questions <= 50:
-        questions_per_batch = 15  # 15 per batch for medium requests  
-    else:
-        questions_per_batch = 20  # 20 per batch for large requests
-    
-    print(f"Using {questions_per_batch} questions per batch for optimal processing")
+    questions_per_batch = min(8, total_questions)  # Max 8 questions per API call
     
     # Split text into overlapping chunks for better continuity
     chunks = []
@@ -135,17 +128,7 @@ Respond in this exact JSON format with no additional text:
     for model in models_to_try:
         try:
             print(f"Trying model: {model} for {num_questions} questions")
-            
-            # Dynamic max_tokens based on number of questions
-            # Roughly 80-120 tokens per question (including options)
-            base_tokens = 200  # For prompt overhead
-            tokens_per_question = 100
-            max_tokens = base_tokens + (num_questions * tokens_per_question)
-            max_tokens = min(max_tokens, 2000)  # Cap at 2000 to stay within limits
-            
-            print(f"Using {max_tokens} max_tokens for {num_questions} questions")
-            
-            response = openai.ChatCompletion.create(
+            response = client.chat.completions.create(
                 model=model,
                 messages=[{
                     "role": "system",
@@ -156,24 +139,22 @@ Respond in this exact JSON format with no additional text:
                     "content": prompt
                 }],
                 temperature=0.7,
-                max_tokens=max_tokens
+                max_tokens=1200  # Conservative limit for batch processing
             )
             import json
-            content = response['choices'][0]['message']['content'].strip()
+            content = response.choices[0].message.content.strip()
             # Remove any markdown code block markers if present
             content = content.replace('```json', '').replace('```', '').strip()
             
             questions = json.loads(content)
             print(f"Successfully generated {len(questions)} questions using {model}")
             return questions
-        except openai.error.OpenAIError as e:
-            print(f"Groq API Error with {model}: {str(e)}")
+        except Exception as e:
+            # Handle any API errors (including rate limits, invalid requests, etc.)
+            print(f"API Error with {model}: {str(e)}")
             continue
         except json.JSONDecodeError as e:
             print(f"JSON parsing error with {model}: {str(e)}")
-            continue
-        except Exception as e:
-            print(f"Error with {model}: {str(e)}")
             continue
     
     print("All models failed for this batch")
@@ -245,7 +226,7 @@ Respond with ONLY the JSON array, no additional text."""
 
         print(f"DEBUG: Prompt sent to AI:\n{prompt[:500]}...")
         
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="llama-3.1-8b-instant",  # Updated to more reliable model
             messages=[{
                 "role": "system",
@@ -259,7 +240,7 @@ Respond with ONLY the JSON array, no additional text."""
         )
         
         import json
-        content = response['choices'][0]['message']['content'].strip()
+        content = response.choices[0].message.content.strip()
         print(f"Raw explanation response: '{content}'")  # Debug log
         
         # Remove any markdown code block markers if present
@@ -284,8 +265,8 @@ Respond with ONLY the JSON array, no additional text."""
         
         return explanations
         
-    except openai.error.OpenAIError as e:
-        print(f"Groq API Error: {str(e)}")
+    except Exception as e:
+        print(f"API Error: {str(e)}")
         # Return fallback explanations
         fallback_explanations = []
         for q in questions_data:

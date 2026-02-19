@@ -63,16 +63,10 @@ class GenerateQuizView(APIView):
         # Get number of questions from request data, default to 5
         num_questions = request.data.get('num_questions', 5)
         
-        # Validate num_questions (no upper limit - batch processing handles any amount!)
-        if not isinstance(num_questions, int) or num_questions < 1:
+        # Validate num_questions
+        if not isinstance(num_questions, int) or num_questions < 1 or num_questions > 20:
             return Response({
-                "error": "num_questions must be a positive integer (minimum 1)"
-            }, status=400)
-        
-        # Add reasonable upper limit to prevent abuse (can be adjusted)
-        if num_questions > 200:
-            return Response({
-                "error": "Maximum 200 questions per request (to prevent timeout). Please make multiple requests for more."
+                "error": "num_questions must be an integer between 1 and 20"
             }, status=400)
 
         questions = generate_mcqs_from_text(pdf.extracted_text, num_questions=num_questions)

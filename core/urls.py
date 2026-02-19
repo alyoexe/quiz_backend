@@ -5,7 +5,7 @@ from .views import (
     SubmitQuizView, UserQuizHistoryView, QuizAnalyticsView, QuizAttemptDetailView,
     QuizExplanationView
 )
-from .authentication import RegisterView, LoginView
+from .authentication import RegisterView, LoginView, GoogleOAuthView
 
 # Create a router and register our viewsets with it
 router = DefaultRouter()
@@ -20,6 +20,7 @@ urlpatterns = [
     # User Management
     path('register/', RegisterView.as_view(), name='register'),
     path('login/', LoginView.as_view(), name='login'),
+    path('google-auth/', GoogleOAuthView.as_view(), name='google-auth'),  # API-only Google OAuth
     
     # Analytics and History
     path('user/quiz-history/', UserQuizHistoryView.as_view(), name='user-quiz-history'),
