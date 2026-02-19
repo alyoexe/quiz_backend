@@ -197,4 +197,9 @@ REST_FRAMEWORK = {
     ],
 }
 
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS Configuration
+CORS_ALLOWED_ORIGINS = [
+    "https://quizfrontenddepoly.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:5173",
+]
