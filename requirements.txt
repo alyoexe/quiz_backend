@@ -2,6 +2,7 @@ Django==5.1.6
 djangorestframework==3.14.0
 django-cors-headers==4.3.1
 django-allauth==65.14.3
+cryptography==43.0.0
 python-dotenv==1.0.0
 groq==0.10.0
 google-auth==2.31.0
