@@ -17,28 +17,23 @@ services:
       - key: DB_ENGINE
         value: "django.db.backends.postgresql"
       - key: DB_NAME
-        fromService:
-          type: postgres
+        fromDatabase:
           name: quiz-db
-          property: database
+          property: databaseName
       - key: DB_USER
-        fromService:
-          type: postgres
+        fromDatabase:
           name: quiz-db
-          property: username
+          property: user
       - key: DB_PASSWORD
-        fromService:
-          type: postgres
+        fromDatabase:
           name: quiz-db
           property: password
       - key: DB_HOST
-        fromService:
-          type: postgres
+        fromDatabase:
           name: quiz-db
           property: host
       - key: DB_PORT
-        fromService:
-          type: postgres
+        fromDatabase:
           name: quiz-db
           property: port
       - key: GOOGLE_CLIENT_ID
@@ -46,8 +41,9 @@ services:
       - key: GROQ_API_KEY
         sync: false
 
-  - type: postgres
-    name: quiz-db
+databases:
+  - name: quiz-db
     plan: free
+    databaseName: quiz_db
+    user: quiz_db
     ipAllowList: []
-    preDeployCommand: echo "Database ready"
